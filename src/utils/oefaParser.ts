@@ -30,7 +30,7 @@ export function extractPageCount(responseData: string): number {
   const match = paginatorText.match(/de\s+(\d+)\s+\((\d+)/i);
   if (match) return Math.max(1, parseInt(match[1], 10));
 
-  const rows = $(`tbody#${TABLE_ID}_data`).find('tr').not('.ui-datatable-empty-message').length;
+  const rows = $(`tbody[id="${TABLE_ID}_data"]`).find('tr').not('.ui-datatable-empty-message').length;
   return rows > 0 ? 1 : 1;
 }
 
@@ -52,7 +52,7 @@ function parseTableRows(html: string, rawResponse?: string): DocumentData[] {
   const $ = cheerio.load(html);
   const docs: DocumentData[] = [];
 
-  const tableBody = $(`tbody#${TABLE_ID}_data`);
+  const tableBody = $(`tbody[id="${TABLE_ID}_data"]`);
   if (tableBody.length === 0) return [];
 
   const rows = tableBody.find('tr').not('.ui-datatable-empty-message');

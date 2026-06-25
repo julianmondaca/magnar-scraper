@@ -90,7 +90,12 @@ export class OefaClient {
     return response.data;
   }
 
-  async downloadPdf(url: string, viewState: string, rowIndex: number, uuid: string): Promise<Buffer> {
+  async downloadPdf(
+    url: string,
+    viewState: string,
+    rowIndex: number,
+    uuid: string
+  ): Promise<{ buffer: Buffer; filename?: string }> {
     logger.debug(`Downloading PDF uuid=${uuid} row=${rowIndex}`);
     await this.enforceRateLimit();
 
@@ -113,7 +118,15 @@ export class OefaClient {
 
     this.lastRequestTime = Date.now();
     this.updateCookie(response);
-    return Buffer.from(response.data);
+
+    let filename: string | undefined;
+    const disposition = response.headers["content-disposition"];
+    if (disposition) {
+      const match = disposition.match(/filename\*?=(?:UTF-8'')?["']?([^;"']+)["']?/i);
+      if (match) filename = decodeURIComponent(match[1]);
+    }
+
+    return { buffer: Buffer.from(response.data), filename };
   }
 
   private async enforceRateLimit(): Promise<void> {

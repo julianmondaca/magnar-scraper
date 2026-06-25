@@ -9,7 +9,7 @@ import {
 } from "../utils/oefaParser";
 import { DocumentData } from "../types";
 import { PATHS, RATE_LIMIT, RETRY } from "../config";
-import { sleep, randomBetween } from "../utils/utils";
+import { sleep, randomBetween, sanitizeFileName } from "../utils/utils";
 import { logger } from "../utils/logger";
 
 const URLs: Record<string, string> = {
@@ -46,13 +46,13 @@ export class OefaScraper {
     const firstPageDocs = extractSearchDocuments(searchResponse);
     logger.info(`Page 1: ${firstPageDocs.length} documents`);
 
-    await this.downloadPagePdfs(firstPageDocs, 1);
+    await this.downloadPagePdfs(firstPageDocs);
     this.allDocuments.push(...firstPageDocs);
 
     const pageCount = extractPageCount(searchResponse);
     logger.info(`Total pages: ${pageCount}`);
 
-    // TODO: Descomentar para implementar paginación
+    // Descomentar para descargar todos los documentos
     // for (let page = 2; page <= pageCount; page++) {
     //   await sleep(randomBetween(2000, 4000));
 
@@ -65,10 +65,10 @@ export class OefaScraper {
     //   const pageDocs = extractPageDocuments(pageResponse);
     //   logger.info(`Page ${page}/${pageCount}: ${pageDocs.length} documents`);
 
-    //   await this.downloadPagePdfs(pageDocs, page);
+    //   await this.downloadPagePdfs(pageDocs);
     //   this.allDocuments.push(...pageDocs);
 
-    //   logger.info(`Total: ${this.allDocuments.length} documents, ${this.downloadedPdfs} PDFs`);
+    //   logger.info(`Progress: ${this.allDocuments.length} docs, ${this.downloadedPdfs} PDFs`);
     // }
 
     return this.allDocuments;
@@ -85,22 +85,13 @@ export class OefaScraper {
     return `Documents: ${this.allDocuments.length}, PDFs downloaded: ${this.downloadedPdfs}, Failed: ${this.failedPdfs}`;
   }
 
-  private async downloadPagePdfs(docs: DocumentData[], page: number): Promise<void> {
+  private async downloadPagePdfs(docs: DocumentData[]): Promise<void> {
     for (let i = 0; i < docs.length; i++) {
       const doc = docs[i];
       const uuid = this.extractUuid(doc);
       if (!uuid) continue;
 
-      const fileName = doc.pdfFileName || `${doc.fields.expediente || `pag${page}_doc${i + 1}`}.pdf`;
-      const filePath = path.join(PATHS.pdfsDir, fileName);
-
-      if (fs.existsSync(filePath)) {
-        logger.debug(`Already exists: ${fileName}`);
-        this.downloadedPdfs++;
-        continue;
-      }
-
-      const success = await this.downloadPdfWithRetry(uuid, filePath, page, i + 1);
+      const success = await this.downloadPdfWithRetry(uuid, i);
       if (success) this.downloadedPdfs++;
       else this.failedPdfs++;
 
@@ -118,18 +109,13 @@ export class OefaScraper {
     return undefined;
   }
 
-  private async downloadPdfWithRetry(
-    uuid: string,
-    filePath: string,
-    page: number,
-    rowOnPage: number
-  ): Promise<boolean> {
+  private async downloadPdfWithRetry(uuid: string, rowOnPage: number): Promise<boolean> {
     for (let attempt = 1; attempt <= RETRY.maxAttempts; attempt++) {
       try {
-        const buffer = await this.client.downloadPdf(
+        const { buffer, filename } = await this.client.downloadPdf(
           this.url,
           this.viewState,
-          rowOnPage - 1,
+          rowOnPage,
           uuid
         );
 
@@ -137,8 +123,11 @@ export class OefaScraper {
           throw new Error(`Response too small (${buffer.length} bytes)`);
         }
 
+        const safeName = sanitizeFileName(filename || `${uuid}.pdf`);
+        const filePath = path.join(PATHS.pdfsDir, safeName);
+
         fs.writeFileSync(filePath, buffer);
-        logger.info(`  Downloaded: ${path.basename(filePath)} (${buffer.length} bytes)`);
+        logger.info(`  Downloaded: ${safeName} (${buffer.length} bytes)`);
         return true;
       } catch (error: unknown) {
         const err = error as { response?: { status?: number }; message?: string };
@@ -148,7 +137,7 @@ export class OefaScraper {
           const delay = RETRY.initialDelayMs * Math.pow(RETRY.backoffFactor, attempt - 1);
           const jittered = delay + Math.floor(Math.random() * 1000);
           logger.warn(
-            ` 429 on ${uuid} (attempt ${attempt}/${RETRY.maxAttempts}), retrying in ${(jittered / 1000).toFixed(1)}s`
+            `  429 on ${uuid} (attempt ${attempt}/${RETRY.maxAttempts}), retrying in ${(jittered / 1000).toFixed(1)}s`
           );
           await sleep(jittered);
           continue;
