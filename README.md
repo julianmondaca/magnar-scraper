@@ -1,66 +1,118 @@
-# Magnar Scraper 🔍
+# Magnar Scraper
 
-Este proyecto es un scraper desarrollado en **TypeScript** diseñado para extraer metadatos de documentos y descargar sus archivos PDF correspondientes desde el repositorio digital del **Organismo de Evaluación y Fiscalización Ambiental (OEFA)** de Perú.
+Este proyecto es un scraper desarrollado en **TypeScript** diseñado para extraer metadatos de documentos y descargar sus archivos PDF desde dos fuentes del gobierno peruano:
 
-Cumpliendo con los requerimientos técnicos del desafío, el scraper **no utiliza automatización de navegador** (como Puppeteer, Playwright o Selenium). En su lugar, emula directamente las peticiones HTTP (POST/GET) e interactúa con el estado de la sesión y el `ViewState` de JavaServer Faces (JSF), logrando una velocidad óptima y un consumo mínimo de recursos.
+- **OEFA** (Organismo de Evaluación y Fiscalización Ambiental) — TFA y DFSAI
+- **Jurisprudencia PJ** (Poder Judicial) — base de datos de jurisprudencia
 
----
-
-## 🛠️ Características del Proyecto
-
-- **Extracción de Metadatos**: Obtiene campos clave como número de expediente, administrado, unidad fiscalizable, sector, resolución, número de orden y enlace del PDF.
-- **Descarga Inteligente de PDFs**: Resuelve enlaces y formularios de descarga dinámicos obteniendo el identificador único (`param_uuid`) de cada documento.
-- **Manejo de Errores y Reintentos**:
-  - Implementa un sistema de reintentos con **Backoff Exponencial y Jitter** para mitigar errores HTTP `429 (Too Many Requests)`.
-  - Omite documentos persistentes con fallas tras agotar los intentos y continúa con el flujo principal sin bloquear la ejecución.
-- **Control de Tasa (Rate Limiting)**: Introduce retrasos aleatorios y configurables entre peticiones para prevenir bloqueos por parte del servidor.
-- **Estructura Modular**: Separación clara entre el cliente HTTP ([oefaClient.ts](/magnar-scraper/src/httpClients/oefaClient.ts)), el scraper principal ([oefaScraper.ts](/magnar-scraper/src/scrapers/oefaScraper.ts)), los utilitarios de análisis ([oefaParser.ts](/magnar-scraper/src/utils/oefaParser.ts)) y la configuración ([config.ts](/magnar-scraper/src/config.ts)).
+El scraper **no utiliza automatización de navegador** (Puppeteer, Playwright o Selenium). En su lugar, emula directamente las peticiones HTTP (POST/GET) e interactúa con el estado de la sesión, cookies y el `ViewState` de JavaServer Faces (JSF), logrando una velocidad óptima y un consumo mínimo de recursos.
 
 ---
 
-## 🚀 Guía de Instalación y Ejecución
+## Características
 
-### Requisitos Previos
+- **Dos scrapers independientes**: OEFA (TFA/DFSAI) y Jurisprudencia PJ, cada uno con su propia lógica de extracción.
+- **Extracción de Metadatos (OEFA)**: Obtiene campos clave como número de expediente, administrado, unidad fiscalizable, sector, resolución y enlace del PDF.
+- **Paginación completa**: Navega por todas las páginas de resultados mediante AJAX (PrimeFaces para OEFA, RichFaces para Jurisprudencia).
+- **Manejo de sesión JSF**: Extrae y reenvía `javax.faces.ViewState` en cada petición, y mantiene cookies manualmente (JSESSIONID) para mantener la sesión.
+- **Descarga inteligente de PDFs**: Resuelve enlaces de descarga dinámicos obteniendo el UUID de cada documento.
+- **Sistema de deduplicación**: Verifica `data/documents.json` antes de descargar para evitar duplicados; registra cada descarga exitosa inmediatamente.
+- **Reintentos con backoff**: Reintentos con Backoff Exponencial y Jitter para errores HTTP 429.
+- **Control de concurrencia**: Descargas paralelas limitadas (5 simultáneas en Jurisprudencia) y rate limiting configurable (OEFA).
+- **Estructura modular**: Separación clara entre cliente HTTP, scraper, parser, configuración y utilidades.
 
-- [Node.js](https://nodejs.org/) (versión 14 o superior recomendada)
-- `npm` (administrador de paquetes de Node)
+---
 
-### 1. Instalación de Dependencias
+## Requisitos Previos
 
-Clona o descarga el proyecto, accede a la raíz del directorio y ejecuta el siguiente comando para instalar las dependencias necesarias (incluyendo TypeScript, `axios` y `cheerio`):
+- Node.js (v14 o superior)
+- npm
+
+## Instalación
 
 ```bash
 npm install
 ```
 
-### 2. Ejecución del Scraper
+## Ejecución
 
-El proyecto cuenta con scripts configurados en el [package.json](/magnar-scraper/package.json) para ejecutar los scrapers fácilmente. Puedes apuntar a dos portales distintos de la OEFA pasando el argumento correspondiente al script de ejecución:
-
-#### Opción A: Scraper para el Tribunal de Fiscalización Ambiental (TFA)
-Inicia la extracción y descarga de documentos de la mesa del TFA (`consultaTfa.xhtml`):
+### OEFA — Tribunal de Fiscalización Ambiental (TFA)
 
 ```bash
 npm start tfa
-# o bien
-npm run dev tfa
 ```
 
-#### Opción B: Scraper para la Dirección de Fiscalización y Sanción (DFSAI)
-Inicia la extracción y descarga de documentos del portal de la DFSAI (`consultaDfsai.xhtml`):
+### OEFA — Dirección de Fiscalización y Sanción (DFSAI)
 
 ```bash
 npm start dfsai
-# o bien
-npm run dev dfsai
 ```
 
-*(Si ejecutas `npm start` sin argumentos adicionales, por defecto iniciará el scraper del **TFA**).*
+### Jurisprudencia PJ
+
+```bash
+npm start jurisprudencia
+```
+
+*Sin argumento, por defecto ejecuta el scraper del TFA.*
 
 ---
 
-## 📁 Estructura de Salida
+## Estructura de Salida
 
-Una vez que el scraper comience a ejecutarse:
-1. **Metadatos**: Los registros extraídos se guardarán en formato estructurado JSON dentro del archivo `data/documents.json`.
-2. **Archivos PDF**: Los documentos descargados exitosamente se almacenarán en la carpeta `pdfs/` renombrados utilizando el número de expediente de manera sanitizada (por ejemplo: `001-2024-OEFA-TFA.pdf`).
+```
+data/documents.json      — Registro único de descargas (OEFA + Jurisprudencia)
+pdf/                     — Todos los PDFs descargados
+logs/
+  failed-downloads.json  — Descargas fallidas
+  failed-pages.json      — Páginas que no pudieron procesarse
+```
+
+### Sistema de Deduplicación
+
+El archivo `data/documents.json` funciona como registro único compartido entre ambos scrapers. Antes de descargar un PDF, el scraper consulta este archivo por UUID. Si el documento ya fue descargado previamente (por cualquier scraper), se salta automáticamente.
+
+Cada registro incluye:
+- `uuid` — identificador único del documento
+- `filename` — nombre del archivo guardado
+- `source` — origen (`jurisprudencia`, `oefa-tfa`, `oefa-dfsai`)
+- `downloadedAt` — timestamp ISO de la descarga
+- `metadata` — (OEFA) campos del documento
+
+---
+
+## Estructura del Proyecto
+
+```
+src/
+  index.ts                             — Punto de entrada
+  config.ts                            — Configuración (rutas, rate limits, reintentos)
+  types.ts                             — Interfaces TypeScript
+  scrapers/
+    jurisprudenciaScraper.ts           — Scraper para Jurisprudencia PJ
+    oefaScraper.ts                     — Scraper para OEFA TFA/DFSAI
+  httpClients/
+    oefaClient.ts                      — Cliente HTTP con manejo de sesión JSF para OEFA
+  utils/
+    utils.ts                           — Utilidades generales (sleep, sanitizeFileName, loadDownloadedUuids, appendDownloadRecord)
+    oefaParser.ts                      — Parseo de respuestas AJAX de OEFA
+    logger.ts                          — Logger coloreado
+```
+
+---
+
+## Detalles Técnicos
+
+### Jurisprudencia PJ
+
+- **Flujo**: GET `inicio.xhtml` → POST a `inicio.xhtml` con el formulario de búsqueda → 302 redirect → GET `resultado.xhtml` (datos de página 1 incluidos en el HTML).
+- **Paginación**: AJAX POST a `resultado.xhtml` con `rich:datascroller:onscroll`, parámetro `formBuscador:data2:page=N`. Cada página devuelve XML con 10 UUIDs y un nuevo ViewState.
+- **Descarga**: GET directo a `ServletDescarga?uuid=...`. El nombre del archivo se extrae del header `Content-Disposition`.
+- **Cookies**: Manejo manual de JSESSIONID; se extrae de `Set-Cookie` y se reenvía en cada petición.
+
+### OEFA (TFA / DFSAI)
+
+- **Flujo**: GET de la página de consulta → AJAX POST con `btnBuscar` → PrimeFaces partial response.
+- **Paginación**: AJAX POST con parámetros `_first` y `_rows` para navegar entre páginas.
+- **Descarga**: POST al formulario con `param_uuid`; el PDF se devuelve como `arraybuffer`.
+- **Rate limiting**: Retraso configurable de 2-3 segundos entre peticiones para evitar bloqueos.
