@@ -1,18 +1,22 @@
 import { OefaScraper } from './scrapers/oefaScraper';
+import { JurisprudenciaScraper } from './scrapers/jurisprudenciaScraper';
 import { logger } from './utils/logger';
 
-const SITE = process.argv[2] === 'dfsai' ? 'dfsai' : 'tfa';
+const TARGET = process.argv[2] || 'tfa';
 
 async function main(): Promise<void> {
-  logger.info('=== Magnar Scraper ===');
-  logger.info(`Target: OEFA ${SITE === 'tfa' ? 'TFA' : 'DFSAI'}`);
+  if (TARGET === 'jurisprudencia') {
+    logger.info('=== Magnar Scraper - Jurisprudencia PJ ===');
+    const scraper = new JurisprudenciaScraper();
+    await scraper.scrapeAll();
+    return;
+  }
 
-  const scraper = new OefaScraper(SITE);
-
+  const site = TARGET === 'dfsai' ? 'dfsai' : 'tfa';
+  logger.info(`=== Magnar Scraper - OEFA ${site.toUpperCase()} ===`);
+  const scraper = new OefaScraper(site);
   await scraper.scrapeAll();
   scraper.saveDocuments();
-
-  logger.info('=== Summary ===');
   logger.info(scraper.summary);
   logger.info('=== Scraper finished ===');
 }
