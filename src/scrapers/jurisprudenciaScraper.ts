@@ -4,14 +4,14 @@ import fs from "fs";
 import path from "path";
 import pLimit from "p-limit";
 import { logger } from "../utils/logger";
-import { sleep } from "../utils/utils";
+import { sleep, loadDownloadedUuids, appendDownloadRecord, sanitizeFileName } from "../utils/utils";
 
 const BASE = "https://jurisprudencia.pj.gob.pe";
 const INICIO_PATH = "/jurisprudenciaweb/faces/page/inicio.xhtml";
 const RESULTADO_PATH = "/jurisprudenciaweb/faces/page/resultado.xhtml";
 const INICIO_URL = `${BASE}${INICIO_PATH}`;
 const RESULTADO_URL = `${BASE}${RESULTADO_PATH}`;
-const DOWNLOAD_DIR = "downloads";
+const DOWNLOAD_DIR = "pdf";
 const LOGS_DIR = "logs";
 const CONCURRENCY = 5;
 
@@ -56,7 +56,9 @@ export class JurisprudenciaScraper {
   private viewState = "";
   private totalPages = 0;
   private totalUuids = 0;
-  private downloaded = 0;
+  private newDownloads = 0;
+  private skippedDownloads = 0;
+  private downloadedUuids: Set<string> = new Set();
   private failedDownloads: { page: number; uuid: string; error: string }[] = [];
   private failedPages: number[] = [];
   private startTime = 0;
@@ -77,6 +79,9 @@ export class JurisprudenciaScraper {
     this.startTime = Date.now();
     fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
     fs.mkdirSync(LOGS_DIR, { recursive: true });
+
+    this.downloadedUuids = loadDownloadedUuids();
+    logger.info(`Loaded ${this.downloadedUuids.size} previously downloaded UUIDs`);
 
     logger.info("=== Jurisprudencia Scraper ===");
 
@@ -100,12 +105,11 @@ export class JurisprudenciaScraper {
     const limit = pLimit(CONCURRENCY);
     if (page1Uuids.length > 0) {
       const tasks = page1Uuids.map((uuid) => limit(() => this.downloadPdf(uuid, 1)));
-      const results = await Promise.all(tasks);
-      this.downloaded += results.filter(Boolean).length;
+      await Promise.all(tasks);
     }
 
     const startPageElapsed = ((Date.now() - this.startTime) / 1000).toFixed(0);
-    logger.info(`Page 1/${this.totalPages} | ${this.downloaded} downloaded | ${startPageElapsed}s`);
+    logger.info(`Page 1/${this.totalPages} | ${this.newDownloads} new, ${this.skippedDownloads} skipped | ${startPageElapsed}s`);
     // Descomentar para realizar flujo completo
     // for (let page = 2; page <= this.totalPages; page++) {
     //   try {
@@ -130,13 +134,12 @@ export class JurisprudenciaScraper {
 
     //     if (uuids.length > 0) {
     //       const tasks = uuids.map((uuid) => limit(() => this.downloadPdf(uuid, page)));
-    //       const results = await Promise.all(tasks);
-    //       this.downloaded += results.filter(Boolean).length;
+    //       await Promise.all(tasks);
     //     }
 
     //     const elapsed = ((Date.now() - this.startTime) / 1000).toFixed(0);
     //     logger.info(
-    //       `Page ${page}/${this.totalPages} | UUIDs: ${uuids.length} | Downloaded: ${this.downloaded} | Failed: ${this.failedDownloads.length} | ${elapsed}s`
+    //       `Page ${page}/${this.totalPages} | UUIDs: ${uuids.length} | New: ${this.newDownloads} | Skipped: ${this.skippedDownloads} | Failed: ${this.failedDownloads.length} | ${elapsed}s`
     //     );
 
     //     if (this.failedDownloads.length > 0 && page % 100 === 0) {
@@ -272,6 +275,11 @@ export class JurisprudenciaScraper {
   }
 
   private async downloadPdf(uuid: string, page: number): Promise<boolean> {
+    if (this.downloadedUuids.has(uuid)) {
+      this.skippedDownloads++;
+      return true;
+    }
+
     try {
       const res = await this.session.get(
         `https://jurisprudencia.pj.gob.pe/jurisprudenciaweb/ServletDescarga?uuid=${uuid}`,
@@ -297,14 +305,17 @@ export class JurisprudenciaScraper {
         if (match) filename = decodeURIComponent(match[1]);
       }
 
-      const safeName = filename
-        .replace(/[<>:"/\\|?*]/g, "_")
-        .replace(/\s+/g, "_")
-        .replace(/_+/g, "_")
-        .replace(/^_|_$/g, "")
-        .substring(0, 200);
+      const safeName = sanitizeFileName(filename);
 
       fs.writeFileSync(path.join(DOWNLOAD_DIR, safeName), buffer);
+      this.downloadedUuids.add(uuid);
+      this.newDownloads++;
+      appendDownloadRecord({
+        uuid,
+        filename: safeName,
+        source: "jurisprudencia",
+        downloadedAt: new Date().toISOString(),
+      });
       return true;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -429,7 +440,8 @@ export class JurisprudenciaScraper {
     logger.info("=== Summary ===");
     logger.info(`Pages: ${this.totalPages}`);
     logger.info(`Total UUIDs: ${this.totalUuids}`);
-    logger.info(`Downloaded: ${this.downloaded}`);
+    logger.info(`New downloads: ${this.newDownloads}`);
+    logger.info(`Skipped (already existed): ${this.skippedDownloads}`);
     logger.info(`Failed downloads: ${this.failedDownloads.length}`);
     logger.info(`Failed pages: ${this.failedPages.length}`);
     logger.info(`Time: ${elapsed}s`);

@@ -9,7 +9,7 @@ import {
 } from "../utils/oefaParser";
 import { DocumentData } from "../types";
 import { PATHS, RATE_LIMIT, RETRY } from "../config";
-import { sleep, randomBetween, sanitizeFileName } from "../utils/utils";
+import { sleep, randomBetween, sanitizeFileName, loadDownloadedUuids, appendDownloadRecord } from "../utils/utils";
 import { logger } from "../utils/logger";
 
 const URLs: Record<string, string> = {
@@ -19,13 +19,17 @@ const URLs: Record<string, string> = {
 
 export class OefaScraper {
   private client: OefaClient;
+  private site: string;
   private url: string;
   private viewState = "";
   private allDocuments: DocumentData[] = [];
   private downloadedPdfs = 0;
+  private skippedPdfs = 0;
   private failedPdfs = 0;
+  private downloadedUuids: Set<string> = new Set();
 
   constructor(site: keyof typeof URLs = "tfa") {
+    this.site = site;
     this.url = URLs[site];
     this.client = new OefaClient();
   }
@@ -33,6 +37,9 @@ export class OefaScraper {
   async scrapeAll(): Promise<DocumentData[]> {
     logger.info(`Initializing OEFA scraper: ${this.url}`);
     fs.mkdirSync(PATHS.pdfsDir, { recursive: true });
+
+    this.downloadedUuids = loadDownloadedUuids();
+    logger.info(`Loaded ${this.downloadedUuids.size} previously downloaded UUIDs`);
 
     const initHtml = await this.client.init(this.url);
     this.viewState = this.extractViewStateFromHtml(initHtml);
@@ -77,12 +84,28 @@ export class OefaScraper {
   saveDocuments(): void {
     fs.mkdirSync(PATHS.dataDir, { recursive: true });
     const filePath = path.join(PATHS.dataDir, PATHS.documentsFile);
-    fs.writeFileSync(filePath, JSON.stringify(this.allDocuments, null, 2), "utf-8");
-    logger.info(`Saved ${this.allDocuments.length} documents to ${filePath}`);
+
+    let existing: unknown[] = [];
+    try {
+      existing = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+    } catch {
+      existing = [];
+    }
+
+    const nonOefa = existing.filter((r: unknown) => {
+      const d = r as Record<string, unknown>;
+      return !d.fields || typeof d.fields !== "object";
+    });
+
+    const all = [...nonOefa, ...this.allDocuments];
+    fs.writeFileSync(filePath, JSON.stringify(all, null, 2), "utf-8");
+    logger.info(
+      `Saved ${this.allDocuments.length} OEFA docs to ${filePath} (${all.length} total records)`
+    );
   }
 
   get summary(): string {
-    return `Documents: ${this.allDocuments.length}, PDFs downloaded: ${this.downloadedPdfs}, Failed: ${this.failedPdfs}`;
+    return `Documents: ${this.allDocuments.length}, PDFs: ${this.downloadedPdfs} new + ${this.skippedPdfs} skipped, Failed: ${this.failedPdfs}`;
   }
 
   private async downloadPagePdfs(docs: DocumentData[]): Promise<void> {
@@ -91,9 +114,25 @@ export class OefaScraper {
       const uuid = this.extractUuid(doc);
       if (!uuid) continue;
 
+      if (this.downloadedUuids.has(uuid)) {
+        this.skippedPdfs++;
+        continue;
+      }
+
       const success = await this.downloadPdfWithRetry(uuid, i);
-      if (success) this.downloadedPdfs++;
-      else this.failedPdfs++;
+      if (success) {
+        this.downloadedUuids.add(uuid);
+        this.downloadedPdfs++;
+        appendDownloadRecord({
+          uuid,
+          filename: sanitizeFileName(doc.pdfFileName || `${uuid}.pdf`),
+          source: `oefa-${this.site}`,
+          downloadedAt: new Date().toISOString(),
+          metadata: doc.fields,
+        });
+      } else {
+        this.failedPdfs++;
+      }
 
       if (i < docs.length - 1) {
         await sleep(RATE_LIMIT.pdfDelayMs);

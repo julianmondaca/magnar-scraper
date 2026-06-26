@@ -12,7 +12,7 @@ export const RETRY = {
 
 export const PATHS = {
   dataDir: 'data',
-  pdfsDir: 'pdfs',
+  pdfsDir: 'pdf',
   documentsFile: 'documents.json',
   failedPdfsFile: 'failed_pdfs.json',
   progressFile: 'progress.json',
